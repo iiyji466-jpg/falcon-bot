@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 from threading import Thread
@@ -7,15 +6,14 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import yt_dlp
 
-# --- جزء Flask للبقاء حياً ---
+# --- 1. نظام إبقاء البوت مستيقظاً (Flask) ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is Online and Alive!"
+    return "OK - Bot is Alive"
 
 def run():
-    # Render يستخدم المنفذ 8080 تلقائياً
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -24,26 +22,30 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# --- إعدادات البوت والتحميل ---
+# --- 2. إعدادات البوت والتحميل الشامل ---
 
-# ⚠️ ضع التوكن الجديد الخاص بك هنا بين العلامتين
 TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ' 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أهلاً بك! أرسل لي رابط فيديو من يوتيوب أو تيك توك وسأقوم بتحميله لك.")
+    await update.message.reply_text("🚀 أهلاً بك في البوت الشامل!\nأرسل لي رابط فيديو من أي منصة (يوتيوب، تيك توك، فيسبوك، إنستغرام، إلخ) وسأحاول تحميله لك.")
 
 async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     if not url.startswith("http"):
         return
 
-    status_message = await update.message.reply_text("⏳ جاري معالجة الرابط والتحميل...")
+    status_message = await update.message.reply_text("🔍 جاري فحص الرابط والتحميل من المنصة...")
 
+    # إعدادات شاملة لكل المواقع
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': 'video.%(ext)s',
+        # 'format': اختيار أفضل جودة فيديو وصوت مدمجين بصيغة mp4 لضمان عملها على كل الهواتف
+        'format': 'best[ext=mp4]/best', 
+        'outtmpl': 'downloaded_video_%(id)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
+        'cookiefile': 'cookies.txt', # ضروري جداً لتخطي حظر المنصات
+        # إضافة 'noplaylist' لضمان تحميل فيديو واحد فقط إذا كان الرابط لقائمة تشغيل
+        'noplaylist': True,
     }
 
     try:
@@ -51,28 +53,29 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
-            await update.message.reply_video(video=open(filename, 'rb'))
-            os.remove(filename) # مسح الفيديو بعد الإرسال لتوفير المساحة
+            # إرسال الفيديو
+            with open(filename, 'rb') as video:
+                await update.message.reply_video(video=video, caption=f"✅ تم التحميل بنجاح\n📌 العنوان: {info.get('title', 'فيديو')}")
+            
+            # تنظيف الذاكرة
+            if os.path.exists(filename):
+                os.remove(filename)
+                
             await status_message.delete()
             
     except Exception as e:
-        await update.message.reply_text(f"❌ حدث خطأ أثناء التحميل: {str(e)}")
+        await update.message.reply_text(f"❌ عذراً، تعذر التحميل من هذا الرابط.\nالسبب: {str(e)[:200]}...")
 
-# --- تشغيل كل شيء ---
+# --- 3. تشغيل المحرك الرئيسي ---
 
 def main():
-    # 1. تشغيل سيرفر الويب
     keep_alive()
-    print("Web server started.")
-
-    # 2. تشغيل محرك البوت
     application = ApplicationBuilder().token(TOKEN).build()
     
-    # الروابط (Handlers)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), download_video))
     
-    print("Bot is polling...")
+    print("The Universal Bot is running...")
     application.run_polling()
 
 if __name__ == '__main__':
