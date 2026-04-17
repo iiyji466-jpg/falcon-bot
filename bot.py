@@ -1,10 +1,30 @@
 import os
 import asyncio
 import yt_dlp
+from flask import Flask
+from threading import Thread
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# توكن البوت الخاص بك من BotFather
+# --- كود إبقاء البوت يعمل دائماً على Render ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is Online and Alive!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.daemon = True
+    t.start()
+
+keep_alive()
+# ---------------------------------------------
+
 TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
 
 async def download_video(url):
@@ -21,27 +41,25 @@ async def download_video(url):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     if not url.startswith('http'):
+        await update.message.reply_text("من فضلك أرسل رابط فيديو صحيح.")
         return
 
-    msg = await update.message.reply_text("⏳ جاري معالجة الرابط وتحميل الفيديو... انتظر قليلاً")
+    msg = await update.message.reply_text("جاري التحميل... انتظر قليلاً ⏳")
     
     try:
         file_path = await download_video(url)
-        await update.message.reply_video(
-            video=open(file_path, 'rb'), 
-            caption="تم التحميل بنجاح بواسطة بوت فالكون 🦅"
-        )
-        os.remove(file_path) # حذف الملف لتوفير مساحة الخادم
+        await update.message.reply_video(video=open(file_path, 'rb'))
+        if os.path.exists(file_path):
+            os.remove(file_path)
         await msg.delete()
     except Exception as e:
-        await update.message.reply_text(f"❌ حدث خطأ غير متوقع. تأكد من أن الرابط مدعوم.")
-        if os.path.exists('video.mp4'): os.remove('video.mp4')
+        await msg.edit_text(f"حدث خطأ أثناء التحميل: {str(e)}")
 
 def main():
-    print("🚀 البوت بدأ العمل...")
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("البوت يعمل الآن...")
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
