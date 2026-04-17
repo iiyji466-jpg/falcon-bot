@@ -1,0 +1,5 @@
+ydl_opts = {
+    'format': 'best',
+    'cookiefile': 'cookies.txt',  # هذا السطر سيحل مشكلة إنستجرام للأبد
+    'outtmpl': f'vid_{user_id}.%(ext)s',
+}
