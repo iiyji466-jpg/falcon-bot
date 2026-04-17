@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.error import BadRequest
 
 # --- الإعدادات الخاصة بك ---
-TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
+TOKEN = '8512467148:AAEWX7qcBNe0_s_JXXXUYlJXX1RcbBOYuOA'
 CHANNEL_ID = '@YourChannelUsername'  # ضع معرف قناتك هنا (مثال: @my_channel)
 CHANNEL_URL = 'https://t.me/YourChannelUsername' # رابط قناتك
 # -------------------------
