@@ -6,14 +6,15 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- 1. خادم الويب (لإبقاء البوت مستيقظاً 24/7) ---
+# --- 1. خادم الويب المصغر (لإبقاء البوت حياً على Render) ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running with 4K support!"
+    return "Bot is running perfectly!"
 
 def run():
+    # Render يستخدم المتغير PORT تلقائياً
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -24,32 +25,34 @@ def keep_alive():
 
 # --- 2. إعدادات البوت والتحميل بدقة 4K ---
 
+# ⚠️ ضع التوكن الخاص بك هنا
 TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    welcome_text = (
         "🚀 **مرحباً بك في بوت بازل المطور!**\n\n"
-        "أرسل لي أي رابط وسأقوم بتحميله لك بأعلى دقة متوفرة (4K).",
-        parse_mode='Markdown'
+        "أرسل لي أي رابط فيديو وسأقوم بتحميله لك بأعلى دقة متوفرة (4K)."
     )
+    await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
 async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     if not url.startswith("http"):
         return
 
-    # رسالة الانتظار التي طلبتها
+    # رسالة الانتظار التي طلبتها بالتنسيق المطلوب
     status_message = await update.message.reply_text(
-        "⏳ انتظر من فضلك... بوت بازل يحمل لك الفيديوهات بدقة 4K"
+        "⏳ **انتظر من فضلك... بوت بازل يحمل لك الفيديوهات بدقة 4K**",
+        parse_mode='Markdown'
     )
 
-    # إعدادات التحميل القصوى
+    # إعدادات التحميل القصوى (Extreme 4K Settings)
     ydl_opts = {
         # طلب أفضل فيديو (حتى 4K) وأفضل صوت ودمجهما
         'format': 'bestvideo+bestaudio/best',
         'merge_output_format': 'mp4',
         'outtmpl': 'bazel_4k_%(id)s.%(ext)s',
-        'cookiefile': 'cookies.txt',  # ضروري لتجاوز حظر المنصات
+        'cookiefile': 'cookies.txt',  # الحل الجذري لمشكلة "Sign in"
         
         # تحسينات الشبكة وتجاوز الحظر
         'socket_timeout': 60,
@@ -63,6 +66,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }],
         'quiet': True,
         'no_warnings': True,
+        'noplaylist': True,
     }
 
     try:
@@ -73,19 +77,19 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename = ydl.prepare_filename(info)
 
             if os.path.exists(filename):
-                # حساب حجم الملف (تيليجرام يسمح بـ 50MB للبوتات العادية)
+                # ملاحظة: تيليجرام يسمح بـ 50MB للبوتات العادية
                 file_size = os.path.getsize(filename) / (1024 * 1024)
 
                 if file_size > 50:
                     await update.message.reply_text(
-                        f"⚠️ الفيديو جاهز بدقة 4K ولكن حجمه ({file_size:.1f}MB) أكبر من مسموح تيليجرام (50MB).\n"
-                        "جرب تحميل فيديوهات أقصر أو استخدام نسخة تيليجرام بريميوم إذا كان متاحاً."
+                        f"⚠️ **الفيديو جاهز بدقة 4K ولكن حجمه ({file_size:.1f}MB) أكبر من مسموح تيليجرام (50MB).**",
+                        parse_mode='Markdown'
                     )
                 else:
                     with open(filename, 'rb') as video:
                         await update.message.reply_video(
                             video=video,
-                            caption=f"✅ تم التحميل بواسطة بوت بازل بدقة 4K\n📌 **العنوان:** {info.get('title')}",
+                            caption=f"✅ **تم التحميل بواسطة بوت بازل بدقة 4K**\n\n📌 **العنوان:** {info.get('title')}",
                             parse_mode='Markdown'
                         )
                 
@@ -95,15 +99,24 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_message.delete()
 
     except Exception as e:
-        await update.message.reply_text(f"❌ عذراً، حدث خطأ أثناء جلب الفيديو بدقة 4K.\nتأكد من الرابط أو ملف الكوكيز.")
-        print(f"Error: {e}")
+        error_str = str(e)
+        if "Sign in" in error_str:
+            msg = "❌ **يوتيوب يتطلب تحديث ملف الكوكيز (cookies.txt).**"
+        else:
+            msg = f"❌ **عذراً، حدث خطأ أثناء جلب الفيديو بدقة 4K.**"
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
 
 # --- 3. تشغيل البوت ---
 
 def main():
+    # تشغيل نظام البقاء حياً (Flask) لتجاوز مشاكل Sleep Mode
     keep_alive()
+    
+    # بناء التطبيق
     application = ApplicationBuilder().token(TOKEN).build()
     
+    # الروابط
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), download_video))
     
