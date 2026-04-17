@@ -1,68 +1,82 @@
-
-import os
-import asyncio
 import logging
+import os
 import yt_dlp
-from threading import Thread
-from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import BadRequest
 
-# --- إعداد السجلات (Logging) للمراقبة الاحترافية ---
+# --- الإعدادات الخاصة بك ---
+TOKEN = 'YOUR_BOT_TOKEN_HERE'
+CHANNEL_ID = '@YourChannelUsername'  # ضع معرف قناتك هنا (مثال: @my_channel)
+CHANNEL_URL = 'https://t.me/YourChannelUsername' # رابط قناتك
+# -------------------------
+
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# --- 1. خادم الويب (Optimized for Render/Cron-job) ---
-app = Flask('')
-
-@app.route('/')
-def health_check():
-    return "🚀 Bazel Professional Bot is Online", 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    server = Thread(target=run_flask)
-    server.daemon = True
-    server.start()
-
-# --- 2. المحرك الرئيسي للتحميل (Advanced Core) ---
-
-TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
+# وظيفة للتحقق من الاشتراك في القناة
+async def is_subscribed(user_id, context):
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            return True
+        return False
+    except BadRequest:
+        return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(
-        f"🙋‍♂️ أهلاً بك يا {user.first_name} في **بوت بازل الاحترافي**\n\n"
-        "📍 أرسل رابط الفيديو (YouTube, Instagram, TikTok...)\n"
-        "⚡ وسأقوم بالمعالجة فوراً بأعلى دقة متوفرة.",
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
+    await update.message.reply_text(f"أهلاً بك في بوت التحميل الخاص بـ {update.effective_user.first_name}!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     url = update.message.text
-    if not url.startswith(("http://", "https://")):
+
+    # 1. التحقق من الاشتراك أولاً
+    if not await is_subscribed(user_id, context):
+        keyboard = [[InlineKeyboardButton("اضغط هنا للاشتراك في القناة ✅", url=CHANNEL_URL)]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "عذراً، يجب عليك الاشتراك في قناة البوت أولاً لاستخدام الخدمة:",
+            reply_markup=reply_markup
+        )
         return
 
-    # حفظ الرابط بشكل آمن لكل مستخدم
-    context.user_data['url'] = url
-
-    keyboard = [
-        [
-            InlineKeyboardButton("🎬 فيديو (4K/HD)", callback_data='vid'),
-            InlineKeyboardButton("🎵 صوت (MP3)", callback_data='aud')
-        ]
-    ]
-    await update.message.reply_text(
-        "💎 **اختر صيغة التحميل المطلوبة:**",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
-
-async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    # 2. إذا كان مشتركاً، نبدأ التحميل
+    status_msg = await update.message.reply_text('جاري فحص الرابط والتحميل... ⏳')
     
-    url =
+    try:
+        # إعدادات yt-dlp للتحميل النظيف
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': f'vid_{user_id}.%(ext)s',
+            'quiet': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+        # إرسال الفيديو بدون أي روابط دعائية خارجية
+        with open(filename, 'rb') as video:
+            await context.bot.send_video(
+                chat_id=update.effective_chat.id, 
+                video=video, 
+                caption="تم التحميل بنجاح ✅"
+            )
+        
+        os.remove(filename) # حذف الفيديو من السيرفر فوراً
+        await status_msg.delete()
+
+    except Exception as e:
+        await status_msg.edit_text("حدث خطأ! تأكد أن الرابط مدعوم (إنستجرام، تيك توك، إلخ).")
+        logging.error(f"Error: {e}")
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("البوت يعمل الآن بنظام الاشتراك الإجباري الخاص بك...")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
