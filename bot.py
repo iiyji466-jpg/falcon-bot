@@ -2,149 +2,92 @@ import logging
 import os
 import yt_dlp
 import asyncio
-import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from threading import Thread
+from http.server import SimpleHTTPRequestHandler
+import socketserver
 
-# --- التوكن ---
-TOKEN = "8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ"
+# --- الإعدادات ---
+TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
 
-# --- إعداد ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# سيرفر Health Check لمنع توقف Render
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    with socketserver.TCPServer(("", port), SimpleHTTPRequestHandler) as httpd:
+        httpd.serve_forever()
 
-# --- تخزين حالة المستخدم ---
-user_state = {}
+Thread(target=run_health_server, daemon=True).start()
 
-# --- UI ---
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 تحميل فيديو", callback_data="video")],
-        [InlineKeyboardButton("🎵 تحميل صوت", callback_data="audio")],
-        [InlineKeyboardButton("ℹ️ مساعدة", callback_data="help")]
-    ])
-
-def back_button():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 رجوع", callback_data="back")]
-    ])
-
-# --- التحقق ---
-def is_valid_url(url):
-    return re.match(r'https?://\S+', url)
-
-# --- تحميل ---
-def download(url, mode):
+# دالة استخراج الروابط المباشرة
+def extract_direct_link(url, mode):
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best' if mode == "video" else 'bestaudio/best',
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+    }
     try:
-        ydl_opts = {
-            'outtmpl': f'{DOWNLOAD_DIR}/%(title).80s.%(ext)s',
-            'format': 'best[ext=mp4]/best' if mode == "video" else 'bestaudio/best',
-            'quiet': True,
-        }
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            file = ydl.prepare_filename(info)
-            title = info.get("title")
-
-        return file, title
-    except Exception as e:
-        logger.error(e)
+            info = ydl.extract_info(url, download=False)
+            return info.get('url'), info.get('title', 'video')
+    except:
         return None, None
 
-# --- start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.effective_user.id] = None
+    await update.message.reply_text("🚀 أرسل الرابط، وسأعطيك التحميل فوراً!")
 
-    text = """
-✨ *مرحبا بك في بوت التحميل الاحترافي*
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text
+    if "http" not in url: return
+    
+    kb = [[
+        InlineKeyboardButton("🎬 فيديو سريع", callback_data=f"v|{url}"),
+        InlineKeyboardButton("🎵 صوت MP3", callback_data=f"a|{url}")
+    ]]
+    await update.message.reply_text("⚡ اختر طريقة التحميل:", reply_markup=InlineKeyboardMarkup(kb))
 
-📥 أرسل رابط وسأقوم بتحميله لك بسرعة  
-⚡ واجهة ذكية + أداء عالي  
-
-اختر من القائمة:
-"""
-    await update.message.reply_text(text, reply_markup=main_menu(), parse_mode="Markdown")
-
-# --- الأزرار ---
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    data = query.data.split("|")
+    mode = "video" if data[0] == "v" else "audio"
+    target_url = data[1]
 
-    uid = query.from_user.id
+    msg = await query.edit_message_text("⚡ جاري استخراج الرابط المباشر...")
 
-    if query.data == "video":
-        user_state[uid] = "video"
-        await query.edit_message_text("🎬 أرسل رابط الفيديو", reply_markup=back_button())
+    loop = asyncio.get_event_loop()
+    direct_link, title = await loop.run_in_executor(None, extract_direct_link, target_url, mode)
 
-    elif query.data == "audio":
-        user_state[uid] = "audio"
-        await query.edit_message_text("🎵 أرسل رابط الصوت", reply_markup=back_button())
+    if direct_link:
+        # إنشاء زر المشاركة
+        # رابط المشاركة يفتح قائمة جهات الاتصال في تلجرام لإرسال الرابط الأصلي
+        share_url = f"https://t.me/share/url?url={target_url}&text=شاهد هذا الفيديو!"
+        share_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📤 مشاركة الفيديو", url=share_url)
+        ]])
 
-    elif query.data == "help":
-        await query.edit_message_text(
-            "📌 فقط أرسل رابط\n🎯 اختر النوع\n⚡ سيتم التحميل مباشرة",
-            reply_markup=back_button()
-        )
+        caption_text = f"✅ {title}\n\nشكراً لاستخدامك البوت الخاص بنا! ❤️"
 
-    elif query.data == "back":
-        user_state[uid] = None
-        await query.edit_message_text("🏠 القائمة الرئيسية", reply_markup=main_menu())
-
-# --- استقبال الرابط ---
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    url = update.message.text
-
-    if not is_valid_url(url):
-        return
-
-    mode = user_state.get(uid)
-
-    if not mode:
-        await update.message.reply_text("❗ اختر نوع التحميل أولاً", reply_markup=main_menu())
-        return
-
-    msg = await update.message.reply_text("⏳ جاري المعالجة...")
-
-    loop = asyncio.get_running_loop()
-    file, title = await loop.run_in_executor(None, download, url, mode)
-
-    if not file:
-        await msg.edit_text("❌ فشل التحميل")
-        return
-
-    try:
-        caption = f"✅ *{title}*"
-
-        with open(file, "rb") as f:
-            if mode == "video":
-                await update.message.reply_video(video=f, caption=caption, parse_mode="Markdown")
-            else:
-                await update.message.reply_audio(audio=f, caption=caption, parse_mode="Markdown")
-
+        if mode == "video":
+            await query.message.reply_video(video=direct_link, caption=caption_text, reply_markup=share_kb)
+        else:
+            await query.message.reply_audio(audio=direct_link, caption=caption_text, reply_markup=share_kb)
+        
         await msg.delete()
+    else:
+        await msg.edit_text("❌ فشل الاستخراج السريع. حاول مجدداً.")
 
-    except Exception as e:
-        logger.error(e)
-        await msg.edit_text("❌ فشل الإرسال")
-
-    finally:
-        if os.path.exists(file):
-            os.remove(file)
-
-# --- تشغيل ---
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+    app.add_handler(CallbackQueryHandler(cb_handler))
+    app.run_polling(drop_pending_updates=True)
 
-    app.run_polling()
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
