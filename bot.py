@@ -4,138 +4,73 @@ import yt_dlp
 import asyncio
 from threading import Thread
 from flask import Flask
-from concurrent.futures import ThreadPoolExecutor
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- إعداد Flask للبقاء حياً (Keep Alive) ---
-server = Flask('')
+# --- 1. سيرفر الويب (ضروري جداً لـ Render) ---
+server = Flask(__name__)
 
 @server.route('/')
 def home():
-    return "Bot is Running!"
+    return "Bot is Live!"
 
-def run_web_server():
-    # المنفذ الافتراضي 8080 للمنصات السحابية
+def run_web():
+    # Render يمرر المنفذ عبر متغير PORT
     port = int(os.environ.get("PORT", 8080))
     server.run(host='0.0.0.0', port=port)
 
-# --- إعدادات البوت ---
-# استبدل هذا التوكن بالتوكن الجديد من @BotFather
-TOKEN = 'YOUR_NEW_BOT_TOKEN_HERE'
-
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# استخدام ThreadPool للتعامل مع التحميلات المتعددة بسرعة
-executor = ThreadPoolExecutor(max_workers=20)
-url_cache = {}
-
-# --- دالة التحميل الاحترافية ---
-def download_content(url, file_path, mode):
+# --- 2. إعدادات التحميل ---
+def download_video(url, out_name):
     ydl_opts = {
+        'format': 'best',
+        'outtmpl': out_name,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'geo_bypass': True,
-        # تحسين اختيار الصيغ ليكون سريعاً وشاملاً لليوتيوب وغيره
-        'format': 'bestvideo[ext=mp4]+bestaudio[m4a]/best[ext=mp4]/best',
-        'outtmpl': file_path,
-        'merge_output_format': 'mp4',
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
 
-    if mode == "audio":
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-        })
+# --- 3. معالجات الرسائل ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 أهلاً باسل! البوت يعمل الآن بقوة.\nأرسل لي أي رابط فيديو وسأقوم بتحميله.")
+
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text
+    if not url.startswith("http"): return
+
+    status = await update.message.reply_text("⏳ جاري التحميل... يرجى الانتظار.")
+    file_name = f"video_{update.message.message_id}.mp4"
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        return True
+        # تشغيل التحميل في Thread منفصل لعدم تجميد البوت
+        await asyncio.to_thread(download_video, url, file_name)
+
+        if os.path.exists(file_name):
+            with open(file_name, 'rb') as f:
+                await context.bot.send_video(chat_id=update.effective_chat.id, video=f, caption="تم التحميل بنجاح ✅")
+            os.remove(file_name)
+            await status.delete()
+        else:
+            await status.edit_text("❌ لم أتمكن من تحميل الفيديو. تأكد من أن الرابط عام.")
     except Exception as e:
-        logger.error(f"Download Error: {e}")
-        return False
+        logging.error(f"Error: {e}")
+        await status.edit_text("❌ حدث خطأ غير متوقع أثناء التحميل.")
 
-# --- معالجات الأوامر ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name
-    await update.message.reply_text(f"مرحباً {user_name}! ⚡\nأرسل لي أي رابط (يوتيوب، إنستغرام، تيك توك، فيسبوك) وسأقوم بتحميله فوراً.")
+# --- 4. تشغيل البوت ---
+if __name__ == '__main__':
+    # تشغيل سيرفر الويب في الخلفية
+    Thread(target=run_web, daemon=True).start()
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    if not (url.startswith("http://") or url.startswith("https://")):
-        return
-
-    # معرف فريد لكل طلب
-    link_id = f"{update.effective_user.id}_{update.message.message_id}"
-    url_cache[link_id] = url
+    # استخدام التوكن الخاص بك
+    TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
     
-    keyboard = [
-        [InlineKeyboardButton("🎬 فيديو MP4", callback_data=f"v_{link_id}"),
-         InlineKeyboardButton("🎵 صوت MP3", callback_data=f"a_{link_id}")]
-    ]
-    await update.message.reply_text("اختر الصيغة التي تريدها:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    # بناء التطبيق بنظام v20.x
+    app = ApplicationBuilder().token(TOKEN).build()
     
-    data = query.data.split("_")
-    prefix, link_id = data[0], "_".join(data[1:])
-    url = url_cache.get(link_id)
-
-    if not url:
-        await query.edit_message_text("❌ انتهت صلاحية الرابط، أرسله مجدداً.")
-        return
-
-    mode = "video" if prefix == "v" else "audio"
-    ext = "mp4" if mode == "video" else "mp3"
-    file_path = f"file_{link_id}.{ext}"
-
-    await query.edit_message_text(f"⏳ جاري التحميل من {mode}... يرجى الانتظار.")
-
-    loop = asyncio.get_event_loop()
-    success = await loop.run_in_executor(executor, download_content, url, file_path, mode)
-
-    if success and os.path.exists(file_path):
-        try:
-            # التحقق من حجم الملف (تلجرام يدعم حتى 50MB للبوتات)
-            if os.path.getsize(file_path) > 50 * 1024 * 1024:
-                await query.message.reply_text("❌ الملف كبير جداً (أكثر من 50 ميجا)، لا يمكن إرساله عبر تلجرام.")
-            else:
-                with open(file_path, 'rb') as f:
-                    if mode == "video":
-                        await context.bot.send_video(chat_id=query.message.chat_id, video=f, caption="تم التحميل بواسطة بوت باسل ✅")
-                    else:
-                        await context.bot.send_audio(chat_id=query.message.chat_id, audio=f, caption="تم التحميل بواسطة بوت باسل ✅")
-        except Exception as e:
-            await query.message.reply_text(f"❌ حدث خطأ أثناء الإرسال: {e}")
-        finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-    else:
-        await query.message.reply_text("❌ فشل التحميل. تأكد من أن الرابط عام وليس خاص.")
-
-# --- تشغيل البوت ---
-def main():
-    # تشغيل خادم الويب في خلفية منفصلة
-    Thread(target=run_web_server, daemon=True).start()
-
-    # تشغيل البوت
-    app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     
-    logger.info("Bot is starting...")
+    logging.info("Starting Polling...")
     app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
