@@ -2,120 +2,85 @@ import logging
 import os
 import yt_dlp
 import asyncio
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from threading import Thread
 from http.server import SimpleHTTPRequestHandler
 import socketserver
 
 # --- الإعدادات ---
 TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-executor = ThreadPoolExecutor(max_workers=20)
-url_storage = {}
-
-# --- سيرفر لمنع توقف الخدمة على Render ---
+# سيرفر Health Check لمنع توقف Render
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
-    class HealthHandler(SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Bot is Active")
-    
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", port), HealthHandler) as httpd:
+    with socketserver.TCPServer(("", port), SimpleHTTPRequestHandler) as httpd:
         httpd.serve_forever()
 
-threading.Thread(target=run_health_server, daemon=True).start()
+Thread(target=run_health_server, daemon=True).start()
 
-# --- محرك التحميل المتطور ---
-def download_engine(url, mode):
-    # إعدادات لتجاوز حظر يوتيوب وسرعة المعالجة
+# دالة استخراج الروابط المباشرة (بدون تحميل الملف للسيرفر)
+def extract_direct_link(url, mode):
     ydl_opts = {
+        'format': 'best[ext=mp4]/best' if mode == "video" else 'bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
     }
-
-    if mode == "video":
-        ydl_opts.update({
-            'format': 'best[height<=720][ext=mp4]/best',
-            'outtmpl': 'downloads/%(id)s.%(ext)s'
-        })
-    else:
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'outtmpl': 'downloads/%(id)s.%(ext)s',
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
-        })
-
     try:
-        if not os.path.exists('downloads'): os.makedirs('downloads')
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info).replace(".unknown_video", ".mp4") if mode == "video" else ydl.prepare_filename(info).rsplit('.', 1)[0] + ".mp3"
-    except Exception as e:
-        logger.error(f"Download Error: {e}")
-        return None
+            info = ydl.extract_info(url, download=False) # download=False لضمان السرعة
+            return info.get('url'), info.get('title', 'video')
+    except:
+        return None, None
 
-# --- معالجة الأوامر ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 أرسل رابط الفيديو الآن للتحميل السريع!")
+    await update.message.reply_text("🚀 أرسل الرابط، وسأعطيك التحميل فوراً!")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     if "http" not in url: return
     
-    msg_id = str(update.message.message_id)
-    url_storage[msg_id] = url
-    
-    keyboard = [[
-        InlineKeyboardButton("🎬 فيديو MP4", callback_data=f"v_{msg_id}"),
-        InlineKeyboardButton("🎵 صوت MP3", callback_data=f"a_{msg_id}")
+    # خيارات سريعة
+    kb = [[
+        InlineKeyboardButton("🎬 فيديو سريع", callback_data=f"v|{url}"),
+        InlineKeyboardButton("🎵 صوت MP3", callback_data=f"a|{url}")
     ]]
-    await update.message.reply_text("⚡ اختر ما تريد تحميله:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("⚡ اختر طريقة التحميل:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    prefix, msg_id = query.data.split("_")
-    url = url_storage.get(msg_id)
-    if not url: return
+    data = query.data.split("|")
+    mode = "video" if data[0] == "v" else "audio"
+    target_url = data[1]
 
-    mode = "video" if prefix == "v" else "audio"
-    status = await query.edit_message_text("🔄 جاري التحميل... (عادةً أقل من 10 ثوانٍ)")
+    msg = await query.edit_message_text("⚡ جاري استخراج الرابط المباشر...")
 
+    # استخراج الرابط المباشر (يتم في ثانية واحدة)
     loop = asyncio.get_event_loop()
-    path = await loop.run_in_executor(executor, download_engine, url, mode)
+    direct_link, title = await loop.run_in_executor(None, extract_direct_link, target_url, mode)
 
-    if path and os.path.exists(path):
-        await status.edit_text("📤 جاري الرفع...")
-        with open(path, 'rb') as f:
-            if mode == "video":
-                await context.bot.send_video(chat_id=query.message.chat_id, video=f, supports_streaming=True)
-            else:
-                await context.bot.send_audio(chat_id=query.message.chat_id, audio=f)
-        os.remove(path)
+    if direct_link:
+        if mode == "video":
+            # إرسال الفيديو كرابط مباشر (يظهر كفيديو مشغل في تلجرام فوراً)
+            await query.message.reply_video(video=direct_link, caption=f"✅ {title}\n\nتم الاستخراج بنجاح!")
+        else:
+            await query.message.reply_audio(audio=direct_link, caption=f"✅ {title}")
+        await msg.delete()
     else:
-        await status.edit_text("❌ فشل التحميل، تأكد من صحة الرابط.")
+        await msg.edit_text("❌ فشل الاستخراج السريع. حاول مجدداً.")
 
-# --- التشغيل الأساسي ---
 def main():
-    # استخدام drop_pending_updates هو الحل الجذري لمشكلة Conflict
+    # drop_pending_updates=True يحل مشكلة الـ Conflict فوراً
     app = Application.builder().token(TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    
-    logger.info("Bot is running...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+    app.add_handler(CallbackQueryHandler(cb_handler))
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
