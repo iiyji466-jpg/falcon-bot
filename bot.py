@@ -6,85 +6,67 @@ import time
 import threading
 import http.server
 import socketserver
-import urllib.parse  # لإعداد رابط المشاركة
+import urllib.parse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- الإعدادات الخاصة ---
+# --- الإعدادات (تأكد من تغييرها) ---
 TOKEN = '8512467148:AAEWX7qcBNe0_s_JXXXUYlJXX1RcbBOYuOA'
-CHANNEL_ID = '@YourChannelUsername' 
+CHANNEL_ID = ''  # اتركها فارغة إذا لم تكن تملك قناة حالياً
 CHANNEL_URL = 'https://t.me/YourChannelUsername'
 # --------------------
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 def run_health_check():
     PORT = int(os.environ.get("PORT", 8080))
-    handler = http.server.SimpleHTTPRequestHandler
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", PORT), handler) as httpd:
+    with socketserver.TCPServer(("", PORT), http.server.SimpleHTTPRequestHandler) as httpd:
         httpd.serve_forever()
 
 async def is_subscribed(user_id, context):
-    if not CHANNEL_ID.startswith('@'): return True
+    if not CHANNEL_ID or not CHANNEL_ID.startswith('@'): return True
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception: return False
+    except: return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"مرحباً {update.effective_user.first_name}!\nأرسل رابط الفيديو وسأقوم بتحميله.")
+    await update.message.reply_text(f"مرحباً بك! أنا أعمل الآن ✅\nأرسل أي رابط فيديو وسأحمله لك.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     url = update.message.text
+    if not url.startswith('http'): return
 
     if not await is_subscribed(user_id, context):
         keyboard = [[InlineKeyboardButton("الاشتراك في القناة ✅", url=CHANNEL_URL)]]
-        await update.message.reply_text("⚠️ اشترك في القناة أولاً لاستخدام البوت.", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text("⚠️ اشترك أولاً ثم أرسل الرابط مجدداً.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    status_msg = await update.message.reply_text('⏳ جاري المعالجة...')
-    file_path = f"video_{user_id}_{int(time.time())}.mp4"
+    status_msg = await update.message.reply_text('⏳ جاري جلب الفيديو...')
+    file_path = f"vid_{int(time.time())}.mp4"
 
     try:
         ydl_opts = {
-            'format': 'best[ext=mp4]/best',
+            'format': 'best',
             'outtmpl': file_path,
-            'max_filesize': 48 * 1024 * 1024,
-            'quiet': True
+            'quiet': True,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
         }
         await asyncio.to_thread(lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
 
         if os.path.exists(file_path):
-            await status_msg.edit_text("📤 جاري الرفع...")
+            share_url = f"https://t.me/share/url?url={urllib.parse.quote('جرب هذا البوت الرهيب لتحميل الفيديوهات! 📥')}"
+            keyboard = [[InlineKeyboardButton("مشاركة البوت 🚀", url=share_url)]]
             
-            # --- إضافة أزرار المشاركة والاشتراك ---
-            # نص الرسالة التي ستظهر عند المشاركة
-            share_text = urllib.parse.quote(f"شاهد هذا الفيديو الذي حملته عبر البوت! 📥")
-            share_url = f"https://t.me/share/url?url={share_text}"
-            
-            keyboard = [
-                [InlineKeyboardButton("مشاركة الفيديو 🚀", url=share_url)],
-                [InlineKeyboardButton("تابع جديدنا ✅", url=CHANNEL_URL)]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
             with open(file_path, 'rb') as video:
-                await context.bot.send_video(
-                    chat_id=update.effective_chat.id,
-                    video=video,
-                    caption=f"✅ تم التحميل بنجاح!\n\nبواسطة: @{context.bot.username}",
-                    supports_streaming=True,
-                    reply_markup=reply_markup # إضافة الأزرار هنا
-                )
+                await context.bot.send_video(chat_id=update.effective_chat.id, video=video, caption="✅ تم التحميل بنجاح!", reply_markup=InlineKeyboardMarkup(keyboard))
             await status_msg.delete()
         else:
-            await status_msg.edit_text("❌ لم يتم العثور على الفيديو.")
+            await status_msg.edit_text("❌ لم أتمكن من تحميل الفيديو. تأكد أن الحساب ليس خاصاً.")
     except Exception as e:
-        logger.error(e)
-        await status_msg.edit_text("❌ فشل التحميل.")
+        await status_msg.edit_text("❌ فشل التحميل. قد يكون الرابط غير مدعوم حالياً.")
     finally:
         if os.path.exists(file_path): os.remove(file_path)
 
