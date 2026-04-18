@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # --- التوكن ---
-TOKEN = "PUT_YOUR_TOKEN_HERE"
+TOKEN = "8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ"
 
 # --- إعداد ---
 logging.basicConfig(level=logging.INFO)
