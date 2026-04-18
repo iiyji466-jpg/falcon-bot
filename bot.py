@@ -6,33 +6,26 @@ import time
 import threading
 import http.server
 import socketserver
+import urllib.parse  # لإعداد رابط المشاركة
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- الإعدادات الخاصة ---
 TOKEN = '8512467148:AAEWX7qcBNe0_s_JXXXUYlJXX1RcbBOYuOA'
-CHANNEL_ID = '@YourChannelUsername'  # استبدله بيوزر قناتك
+CHANNEL_ID = '@YourChannelUsername' 
 CHANNEL_URL = 'https://t.me/YourChannelUsername'
+# --------------------
 
-# إعداد السجلات
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- وظيفة إرضاء منصة Render (Health Check) ---
 def run_health_check():
-    """فتح منفذ وهمي لمنع Render من إيقاف البوت"""
     PORT = int(os.environ.get("PORT", 8080))
     handler = http.server.SimpleHTTPRequestHandler
-    # السماح بإعادة استخدام المنفذ لتجنب أخطاء التشغيل المتكرر
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", PORT), handler) as httpd:
-        print(f"✅ Health Check يعمل على المنفذ: {PORT}")
         httpd.serve_forever()
 
-# --- وظائف البوت الأساسية ---
 async def is_subscribed(user_id, context):
     if not CHANNEL_ID.startswith('@'): return True
     try:
@@ -59,18 +52,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ydl_opts = {
             'format': 'best[ext=mp4]/best',
             'outtmpl': file_path,
-            'max_filesize': 48 * 1024 * 1024, # 48MB
+            'max_filesize': 48 * 1024 * 1024,
             'quiet': True
         }
         await asyncio.to_thread(lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
 
         if os.path.exists(file_path):
             await status_msg.edit_text("📤 جاري الرفع...")
+            
+            # --- إضافة أزرار المشاركة والاشتراك ---
+            # نص الرسالة التي ستظهر عند المشاركة
+            share_text = urllib.parse.quote(f"شاهد هذا الفيديو الذي حملته عبر البوت! 📥")
+            share_url = f"https://t.me/share/url?url={share_text}"
+            
+            keyboard = [
+                [InlineKeyboardButton("مشاركة الفيديو 🚀", url=share_url)],
+                [InlineKeyboardButton("تابع جديدنا ✅", url=CHANNEL_URL)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
             with open(file_path, 'rb') as video:
-                await context.bot.send_video(chat_id=update.effective_chat.id, video=video, supports_streaming=True)
+                await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=video,
+                    caption=f"✅ تم التحميل بنجاح!\n\nبواسطة: @{context.bot.username}",
+                    supports_streaming=True,
+                    reply_markup=reply_markup # إضافة الأزرار هنا
+                )
             await status_msg.delete()
         else:
-            await status_msg.edit_text("❌ لم يتم العثور على الفيديو أو الحجم كبير جداً.")
+            await status_msg.edit_text("❌ لم يتم العثور على الفيديو.")
     except Exception as e:
         logger.error(e)
         await status_msg.edit_text("❌ فشل التحميل.")
@@ -78,13 +89,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path): os.remove(file_path)
 
 def main():
-    # 1. تشغيل الـ Health Check في خلفية الكود (Thread)
     threading.Thread(target=run_health_check, daemon=True).start()
-
-    # 2. تشغيل البوت
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("🚀 البوت يعمل الآن...")
-    app.run_polling(drop_pending_updates=True
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    main()
