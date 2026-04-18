@@ -2,11 +2,10 @@ import logging
 import os
 import yt_dlp
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from threading import Thread
-from http.server import SimpleHTTPRequestHandler
-import socketserver
 
 # --- الإعدادات ---
 TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
@@ -14,15 +13,28 @@ TOKEN = '8668387351:AAHhKiD9RmBjfUNSREdu0KnSddcMxFPExBQ'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# سيرفر Health Check لمنع توقف Render
+# --- سيرفر Health Check لمنع توقف Render ---
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is running alive!")
+
+    def log_message(self, format, *args):
+        return  # إخفاء سجلات السيرفر لتبقى الشاشة نظيفة للأخطاء المهمة
+
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
-    with socketserver.TCPServer(("", port), SimpleHTTPRequestHandler) as httpd:
-        httpd.serve_forever()
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    logger.info(f"Health check server started on port {port}")
+    server.serve_forever()
 
-Thread(target=run_health_server, daemon=True).start()
+# تشغيل السيرفر في Thread منفصل قبل تشغيل البوت
+threading.Thread(target=run_health_server, daemon=True).start()
 
-# دالة استخراج الروابط المباشرة
+# --- وظائف البوت ---
+
 def extract_direct_link(url, mode):
     ydl_opts = {
         'format': 'best[ext=mp4]/best' if mode == "video" else 'bestaudio/best',
@@ -34,7 +46,8 @@ def extract_direct_link(url, mode):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return info.get('url'), info.get('title', 'video')
-    except:
+    except Exception as e:
+        logger.error(f"Error extracting link: {e}")
         return None, None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,29 +77,33 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     direct_link, title = await loop.run_in_executor(None, extract_direct_link, target_url, mode)
 
     if direct_link:
-        # إنشاء زر المشاركة
-        # رابط المشاركة يفتح قائمة جهات الاتصال في تلجرام لإرسال الرابط الأصلي
+        # زر المشاركة ورسالة الشكر
         share_url = f"https://t.me/share/url?url={target_url}&text=شاهد هذا الفيديو!"
         share_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📤 مشاركة الفيديو", url=share_url)
+            InlineKeyboardButton("📤 مشاركة الملف", url=share_url)
         ]])
-
-        caption_text = f"✅ {title}\n\nشكراً لاستخدامك البوت الخاص بنا! ❤️"
-
-        if mode == "video":
-            await query.message.reply_video(video=direct_link, caption=caption_text, reply_markup=share_kb)
-        else:
-            await query.message.reply_audio(audio=direct_link, caption=caption_text, reply_markup=share_kb)
         
-        await msg.delete()
+        thanks_msg = f"✅ {title}\n\nشكراً لاختيارك بوت التحميل الخاص بنا! ❤️"
+
+        try:
+            if mode == "video":
+                await query.message.reply_video(video=direct_link, caption=thanks_msg, reply_markup=share_kb)
+            else:
+                await query.message.reply_audio(audio=direct_link, caption=thanks_msg, reply_markup=share_kb)
+            await msg.delete()
+        except Exception as e:
+            await msg.edit_text("❌ عذراً، الملف كبير جداً للإرسال المباشر.")
     else:
-        await msg.edit_text("❌ فشل الاستخراج السريع. حاول مجدداً.")
+        await msg.edit_text("❌ فشل الاستخراج. تأكد من أن الرابط مدعوم.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     app.add_handler(CallbackQueryHandler(cb_handler))
+    
+    logger.info("Bot is starting...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
